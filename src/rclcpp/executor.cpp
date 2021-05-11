@@ -56,7 +56,7 @@ Executor::Executor(const rclcpp::ExecutorOptions & options)
     throw_from_rcl_error(ret, "Failed to create interrupt guard condition in Executor constructor");
   }
 
-  context_->on_shutdown(
+  shutdown_callback_handle_ = context_->add_on_shutdown_callback(
     [weak_gc = std::weak_ptr<rclcpp::GuardCondition>{shutdown_guard_condition_}]() {
       auto strong_gc = weak_gc.lock();
       if (strong_gc) {
@@ -138,6 +138,14 @@ Executor::~Executor()
   }
   // Remove and release the sigint guard condition
   memory_strategy_->remove_guard_condition(&shutdown_guard_condition_->get_rcl_guard_condition());
+
+  // Remove shutdown callback handle registered to Context
+  if (!context_->remove_on_shutdown_callback(shutdown_callback_handle_)) {
+    RCUTILS_LOG_ERROR_NAMED(
+      "rclcpp",
+      "failed to remove registered on_shutdown callback");
+    rcl_reset_error();
+  }
 }
 
 std::vector<rclcpp::CallbackGroup::WeakPtr>
@@ -581,8 +589,7 @@ Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
       [&]() {return subscription->take_serialized(*serialized_msg.get(), message_info);},
       [&]()
       {
-        auto void_serialized_msg = std::static_pointer_cast<void>(serialized_msg);
-        subscription->handle_message(void_serialized_msg, message_info);
+        subscription->handle_serialized_message(serialized_msg, message_info);
       });
     subscription->return_serialized_message(serialized_msg);
   } else if (subscription->can_loan_messages()) {
